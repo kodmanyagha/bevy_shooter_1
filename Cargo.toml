@@ -1,0 +1,15 @@
+[package]
+name = "bevy_shooter_1"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.100"
+bevy = "0.16.1"
+thiserror = "2.0.16"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
