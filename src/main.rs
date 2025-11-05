@@ -21,7 +21,7 @@ fn setup(mut commands: Commands) {
 
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
-        Player { speed: 50_f32 },
+        Player { speed: 90_f32 },
         Sprite::from_image(asset_server.load("bevy_bird.png")),
     ));
 }
@@ -31,14 +31,26 @@ fn move_player(
     time: Res<Time>,
     input: Res<ButtonInput<KeyCode>>,
 ) {
-    for (mut transform, mut player) in &mut query {
+    for (mut transform, player) in &mut query {
         println!(
             "Time: {} , x: {}",
             UNIX_EPOCH.elapsed().unwrap().as_secs(),
             transform.translation.x
         );
 
-        if input.pressed(KeyCode::KeyW) {
+        if input.pressed(KeyCode::KeyW) && input.pressed(KeyCode::KeyD) {
+            transform.translation.y += player.speed * time.delta_secs();
+            transform.translation.x += player.speed * time.delta_secs();
+        } else if input.pressed(KeyCode::KeyW) && input.pressed(KeyCode::KeyA) {
+            transform.translation.y += player.speed * time.delta_secs();
+            transform.translation.x -= player.speed * time.delta_secs();
+        } else if input.pressed(KeyCode::KeyS) && input.pressed(KeyCode::KeyD) {
+            transform.translation.y -= player.speed * time.delta_secs();
+            transform.translation.x += player.speed * time.delta_secs();
+        } else if input.pressed(KeyCode::KeyS) && input.pressed(KeyCode::KeyA) {
+            transform.translation.y -= player.speed * time.delta_secs();
+            transform.translation.x -= player.speed * time.delta_secs();
+        } else if input.pressed(KeyCode::KeyW) {
             transform.translation.y += player.speed * time.delta_secs();
         } else if input.pressed(KeyCode::KeyS) {
             transform.translation.y -= player.speed * time.delta_secs();
@@ -61,7 +73,7 @@ fn aim(
     q_window: Query<&Window, With<PrimaryWindow>>,
     camera: Query<(&Camera, &GlobalTransform)>,
 ) {
-    for (mut player_transform, mut player) in &mut query {
+    for (mut player_transform, mut _player) in &mut query {
         let Ok(q_window) = q_window.single() else {
             break;
         };
@@ -109,7 +121,7 @@ fn shoot(
     //     buttons.pressed(MouseButton::Left)
     // );
 
-    if buttons.pressed(MouseButton::Left) && timer.0.tick(time.delta()).finished() {
+    if buttons.pressed(MouseButton::Left) && timer.0.tick(time.delta()).is_finished() {
         commands.spawn((
             target_transform,
             Bullet { speed: 1000_f32 },
