@@ -2,6 +2,7 @@ mod utils;
 
 use bevy::{prelude::*, window::PrimaryWindow};
 use rand::RngExt;
+use std::collections::VecDeque;
 
 use crate::utils::logger::init_tracing_subscriber;
 
@@ -19,6 +20,9 @@ struct Bullet {
 struct Cat;
 
 #[derive(Component)]
+struct MarkedForDespawn;
+
+#[derive(Component)]
 struct Fading {
     timer: Timer,
 }
@@ -30,6 +34,15 @@ struct Respawning {
 
 #[derive(Component)]
 struct ScoreText;
+
+#[derive(Component)]
+struct FpsText;
+
+#[derive(Component)]
+struct AvgFpsText;
+
+#[derive(Resource)]
+struct FpsSamples(VecDeque<f32>);
 
 #[derive(Resource)]
 struct FireRate(Timer);
@@ -175,17 +188,45 @@ fn shoot(
     }
 }
 
-fn move_bullet(mut query: Query<(&mut Transform, &Bullet)>, time: Res<Time>) {
-    for (mut transform, bullet) in &mut query {
-        let direction = transform.local_x();
-        transform.translation += direction * bullet.speed * time.delta_secs();
+fn move_bullet(
+    mut commands: Commands,
+    player: Query<&Transform, (With<Player>, Without<Bullet>)>,
+    mut bullets: Query<(Entity, &mut Transform, &Bullet), Without<MarkedForDespawn>>,
+    time: Res<Time>,
+) {
+    let Some(player_transform) = player.iter().next() else {
+        return;
+    };
+
+    for (bullet_entity, mut bullet_transform, bullet) in &mut bullets {
+        let dist = bullet_transform
+            .translation
+            .distance(player_transform.translation);
+        let direction = bullet_transform.local_x();
+
+        if dist < 500.0 {
+            bullet_transform.translation +=
+                direction * time.delta_secs() * (bullet.speed * ((400.0 - dist.min(10.0)) / 400.0));
+        } else {
+            commands.entity(bullet_entity).insert(MarkedForDespawn);
+        }
     }
+}
+
+fn example_query(
+    mut commands: Commands,
+    mut cats: Query<(Entity, &Transform, &mut Sprite), (With<Cat>)>,
+) {
+    tracing::info!("example_query invoked");
 }
 
 fn bullet_cat_collision(
     mut commands: Commands,
-    bullets: Query<(Entity, &Transform), With<Bullet>>,
-    mut cats: Query<(Entity, &Transform, &mut Sprite), (With<Cat>, Without<Fading>, Without<Respawning>)>,
+    bullets: Query<(Entity, &Transform), (With<Bullet>, Without<MarkedForDespawn>)>,
+    mut cats: Query<
+        (Entity, &Transform, &mut Sprite),
+        (With<Cat>, Without<Fading>, Without<Respawning>),
+    >,
     mut score: ResMut<Score>,
 ) {
     for (bullet_entity, bullet_transform) in &bullets {
@@ -194,11 +235,12 @@ fn bullet_cat_collision(
                 .translation
                 .distance(cat_transform.translation);
             if dist < 48.0 {
-                commands.entity(bullet_entity).despawn();
+                commands.entity(bullet_entity).insert(MarkedForDespawn);
                 score.0 += 1;
                 commands.entity(cat_entity).insert(Fading {
                     timer: Timer::from_seconds(0.6, TimerMode::Once),
                 });
+                break;
             }
         }
     }
@@ -239,6 +281,69 @@ fn respawn_cat(
     }
 }
 
+fn despawn_marked(mut commands: Commands, query: Query<Entity, With<MarkedForDespawn>>) {
+    for entity in &query {
+        commands.entity(entity).despawn();
+    }
+}
+
+fn spawn_fps_ui(mut commands: Commands) {
+    commands.spawn((
+        Text::new("FPS: 0"),
+        TextFont {
+            font_size: FontSize::Px(24.0),
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            right: Val::Px(10.0),
+            ..default()
+        },
+        FpsText,
+    ));
+    commands.spawn((
+        Text::new("AVG: 0"),
+        TextFont {
+            font_size: FontSize::Px(24.0),
+            ..default()
+        },
+        TextColor(Color::srgba(0.8, 0.8, 0.8, 1.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(38.0),
+            right: Val::Px(10.0),
+            ..default()
+        },
+        AvgFpsText,
+    ));
+}
+
+fn update_fps_ui(
+    time: Res<Time>,
+    mut samples: ResMut<FpsSamples>,
+    mut fps_query: Query<&mut Text, (With<FpsText>, Without<AvgFpsText>)>,
+    mut avg_query: Query<&mut Text, (With<AvgFpsText>, Without<FpsText>)>,
+) {
+    let fps = 1.0 / time.delta_secs();
+    samples.0.push_back(fps);
+    if samples.0.len() > 1_000 {
+        samples.0.pop_front();
+    }
+    let mut avg = (samples.0.iter().sum::<f32>() / samples.0.len() as f32).round() as u32;
+    if avg >= 5000 {
+        avg = fps as u32;
+    }
+
+    for mut text in &mut fps_query {
+        **text = format!("FPS: {:>4}", fps.round() as u32);
+    }
+    for mut text in &mut avg_query {
+        **text = format!("AVG: {:>4}", avg);
+    }
+}
+
 fn update_score_ui(score: Res<Score>, mut query: Query<&mut Text, With<ScoreText>>) {
     if score.is_changed() {
         for mut text in &mut query {
@@ -263,7 +368,11 @@ async fn main() {
         .insert_resource(ClearColor(Color::srgb(0.2, 0.2, 0.2)))
         .insert_resource(FireRate(Timer::from_seconds(0.1, TimerMode::Repeating)))
         .insert_resource(Score(0))
-        .add_systems(Startup, (setup, spawn_player, spawn_cat, spawn_score_ui))
+        .insert_resource(FpsSamples(VecDeque::new()))
+        .add_systems(
+            Startup,
+            (setup, spawn_player, spawn_cat, spawn_score_ui, spawn_fps_ui),
+        )
         .add_systems(
             Update,
             (
@@ -272,9 +381,12 @@ async fn main() {
                 shoot,
                 move_bullet,
                 bullet_cat_collision,
+                despawn_marked,
                 fade_cat,
                 respawn_cat,
                 update_score_ui,
+                update_fps_ui,
+                example_query,
             ),
         )
         .run();
